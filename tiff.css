@@ -1,0 +1,158 @@
+.hide {
+    display: none !important;
+}
+
+.tiff-viewer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 80vh;
+    overflow: hidden;
+    box-sizing: border-box;
+    background-color: #525659;
+    border: 2px solid #323639;
+    color: whitesmoke;
+    position: relative;
+}
+
+.tiff-loading {
+    position: absolute;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: rgba(0,0,0,0.5);
+    width: 100%;
+    height: 100%;
+    color: white;
+}
+
+.tiff-controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+    padding: .5rem;
+    background-color: #323639;
+}
+
+.tiff-controls input[type=text] {
+    text-align: center;
+    font-size: .8rem;
+    background-color: black;
+    border: none;
+    color: whitesmoke;
+}
+
+.tiff-controls input[type=text]:focus-visible {
+    outline: none;
+}
+
+.tiff-controls input[type=text]:read-only {
+    background-color: rgba(0,0,0,0) !important;
+}
+
+.tiff-controls input[type=text][name=page-number] {
+    width: 1.5rem;
+}
+.tiff-controls input[type=text][name=total-pages] {
+    width: 1rem;
+}
+.tiff-controls input[type=text][name=zoom] {
+    width: 2.5rem;
+}
+
+.tiff-controls button {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: rgba(255,255,255,0);
+    border: none;
+    color: whitesmoke;
+    width: 1.8rem;
+    height: 1.8rem;
+    cursor: pointer;
+    border-radius: 50%;
+    margin: 0 5px;
+}
+
+.tiff-controls button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.tiff-controls button[name="expandtowidth"] svg {
+    transform: rotate(90deg);
+}
+
+.tiff-controls span.page-sep {
+    padding: 0 0 0 0.25rem;
+    color: whitesmoke;
+}
+
+.tiff-controls div.ctrl-sep {
+    border-left: 0.05em solid rgba(255,255,255,0.25);
+    margin: auto 0.5rem;
+    height: .8rem;
+}
+
+.tiff-pages {
+    display: flex;
+    flex-grow: 2;
+    flex-direction: column; 
+    overflow: auto;
+    width: 100%;
+    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
+}
+
+.tiff-pages.rotated-90 div.tiff-page {
+    transform: rotate(-90deg);
+}
+
+.tiff-pages.rotated-180 div.tiff-page {
+    transform: rotate(-180deg);
+}
+
+.tiff-pages.rotated-270 div.tiff-page {
+    transform: rotate(-270deg);
+}
+
+.tiff-pages div.tiff-page {
+    padding: 0 15px 15px 15px;
+    margin: 0 auto 0 auto;
+    min-width: 20%;
+    max-width: 300%;
+    box-sizing: border-box;
+    text-align: center;
+}
+
+.numpage-wrapper {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+    height: 100%;
+    background-color: white;
+    color: black;
+}
+
+.tiff-pages div.tiff-page small.numpage {
+    display: inline-block;
+}
+
+.tiff-pages div.tiff-page small.numpage::before {
+    content: "Página ";
+}
+
+.tiff-pages div.tiff-page canvas {
+    width: 100%;
+}
+
+.tiff-pages div.canvas-wrapper {
+    border: 5px solid whitesmoke;
+    -webkit-box-shadow: 0px 0px 20px 0px rgba(0,0,0,0.75);
+    -moz-box-shadow: 0px 0px 20px 0px rgba(0,0,0,0.75);
+    box-shadow: 0px 0px 20px 0px rgba(0,0,0,0.95);
+}
