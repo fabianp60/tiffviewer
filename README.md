@@ -1,6 +1,8 @@
 # tiffviewer
 Tiff Viewer is a library that generates a javascript viewer for tiff files
 
+## [Demo](https://fabianp60.github.io/tiffviewer/)
+
 ## Usage
 
 ### Browser
@@ -22,7 +24,7 @@ new TiffViewer(tiffImg);
 
 ## Dependencies
 Tiff Viewer uses [tiff.js](https://github.com/seikichi/tiff.js), a port of LibTIFF
-- Please read tiff.js notes if you have large files problems
+- Please read [tiff.js](https://github.com/seikichi/tiff.js) notes if you have large files problems
 
 ## License
 [GPL-3.0 license](https://github.com/fabianp60/tiffviewer/blob/main/LICENSE)
