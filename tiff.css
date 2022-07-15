@@ -30,11 +30,30 @@
 
 .tiff-controls {
     display: flex;
-    justify-content: center;
+    justify-content: space-between;
     align-items: center;
     width: 100%;
     padding: .5rem;
     background-color: #323639;
+    box-sizing: border-box;
+}
+
+.tiff-controls div.controls-left {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.tiff-controls div.controls-center {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.tiff-controls div.controls-right {
+    display: flex;
+    justify-content: center;
+    align-items: center;
 }
 
 .tiff-controls input[type=text] {
