@@ -43,6 +43,7 @@
     background-color: black;
     border: none;
     color: whitesmoke;
+    width: 4ch;
 }
 
 .tiff-controls input[type=text]:focus-visible {
@@ -51,16 +52,6 @@
 
 .tiff-controls input[type=text]:read-only {
     background-color: rgba(0,0,0,0) !important;
-}
-
-.tiff-controls input[type=text][name=page-number] {
-    width: 1.5rem;
-}
-.tiff-controls input[type=text][name=total-pages] {
-    width: 1rem;
-}
-.tiff-controls input[type=text][name=zoom] {
-    width: 2.5rem;
 }
 
 .tiff-controls button {
