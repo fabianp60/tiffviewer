@@ -1,4 +1,4 @@
-.hide {
+.tiff-viewer .hide {
     display: none !important;
 }
 
@@ -7,17 +7,20 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    min-width: 345px;
+    min-height: 200px;
     width: 100%;
-    height: 80vh;
+    height: 100%;
     overflow: hidden;
     box-sizing: border-box;
     background-color: #525659;
     border: 2px solid #323639;
     color: whitesmoke;
     position: relative;
+    font-family: system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue","Noto Sans","Liberation Sans",Arial,sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";
 }
 
-.tiff-loading {
+.tiff-viewer .tiff-loading {
     position: absolute;
     display: flex;
     justify-content: center;
@@ -28,7 +31,48 @@
     color: white;
 }
 
-.tiff-controls {
+.tiff-viewer .dialog-container {
+    position: absolute;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: rgba(255,255,255,0.4);
+    width: 100%;
+    height: 100%;
+}
+
+.tiff-viewer .dialog-container .dialog-content {
+    display: flex;
+    flex-direction: column;
+    background-color: white;
+    color: black;
+    max-width: 95%;
+    max-height: 95%;
+    padding: 1rem;
+    overflow: auto;
+    border-radius: 0.5rem;
+    box-shadow: 0 .5rem 1rem rgba(0,0,0,.15);
+}
+
+.tiff-viewer .dialog-container .dialog-content h5.title {
+    margin-bottom: 0;
+    margin-top: 0;
+    line-height: 1.5;
+    font-size: 1.25rem;
+}
+
+.tiff-viewer .dialog-container .dialog-content .body {
+    position: relative;
+    flex: 1 1 auto;
+    padding: 1rem 0;
+}
+
+.tiff-viewer .dialog-container .dialog-content.center {
+    align-items: center;
+    justify-content: center;
+}
+
+.tiff-viewer .tiff-controls {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -38,25 +82,25 @@
     box-sizing: border-box;
 }
 
-.tiff-controls div.controls-left {
+.tiff-viewer .tiff-controls div.controls-left {
     display: flex;
     justify-content: center;
     align-items: center;
 }
 
-.tiff-controls div.controls-center {
+.tiff-viewer .tiff-controls div.controls-center {
     display: flex;
     justify-content: center;
     align-items: center;
 }
 
-.tiff-controls div.controls-right {
+.tiff-viewer .tiff-controls div.controls-right {
     display: flex;
     justify-content: center;
     align-items: center;
 }
 
-.tiff-controls input[type=text] {
+.tiff-viewer .tiff-controls input[type=text] {
     text-align: center;
     font-size: .8rem;
     background-color: black;
@@ -65,15 +109,15 @@
     width: 5ch;
 }
 
-.tiff-controls input[type=text]:focus-visible {
+.tiff-viewer .tiff-controls input[type=text]:focus-visible {
     outline: none;
 }
 
-.tiff-controls input[type=text]:read-only {
+.tiff-viewer .tiff-controls input[type=text]:read-only {
     background-color: rgba(0,0,0,0) !important;
 }
 
-.tiff-controls button {
+.tiff-viewer .tiff-controls button {
     display: flex;
     justify-content: center;
     align-items: center;
@@ -87,26 +131,26 @@
     margin: 0 5px;
 }
 
-.tiff-controls button:hover {
+.tiff-viewer .tiff-controls button:hover {
     background-color: rgba(255, 255, 255, 0.1);
 }
 
-.tiff-controls button[name="expandtowidth"] svg {
+.tiff-viewer .tiff-controls button[name="expandtowidth"] svg {
     transform: rotate(90deg);
 }
 
-.tiff-controls span.page-sep {
+.tiff-viewer .tiff-controls span.page-sep {
     padding: 0 0 0 0.25rem;
     color: whitesmoke;
 }
 
-.tiff-controls div.ctrl-sep {
+.tiff-viewer .tiff-controls div.ctrl-sep {
     border-left: 0.05em solid rgba(255,255,255,0.25);
     margin: auto 0.5rem;
     height: .8rem;
 }
 
-.tiff-pages {
+.tiff-viewer .tiff-pages {
     display: flex;
     flex-grow: 2;
     flex-direction: column; 
@@ -117,19 +161,19 @@
     max-height: 100%;
 }
 
-.tiff-pages.rotated-90 div.tiff-page {
+.tiff-viewer .tiff-pages.rotated-90 div.tiff-page {
     transform: rotate(-90deg);
 }
 
-.tiff-pages.rotated-180 div.tiff-page {
+.tiff-viewer .tiff-pages.rotated-180 div.tiff-page {
     transform: rotate(-180deg);
 }
 
-.tiff-pages.rotated-270 div.tiff-page {
+.tiff-viewer .tiff-pages.rotated-270 div.tiff-page {
     transform: rotate(-270deg);
 }
 
-.tiff-pages div.tiff-page {
+.tiff-viewer .tiff-pages div.tiff-page {
     padding: 0 15px 15px 15px;
     margin: 0 auto 0 auto;
     min-width: 20%;
@@ -138,7 +182,7 @@
     text-align: center;
 }
 
-.numpage-wrapper {
+.tiff-viewer .numpage-wrapper {
     display: flex;
     justify-content: center;
     align-items: center;
@@ -148,19 +192,19 @@
     color: black;
 }
 
-.tiff-pages div.tiff-page small.numpage {
+.tiff-viewer .tiff-pages div.tiff-page small.numpage {
     display: inline-block;
 }
 
-.tiff-pages div.tiff-page small.numpage::before {
+.tiff-viewer .tiff-pages div.tiff-page small.numpage::before {
     content: "Página ";
 }
 
-.tiff-pages div.tiff-page canvas {
+.tiff-viewer .tiff-pages div.tiff-page canvas {
     width: 100%;
 }
 
-.tiff-pages div.canvas-wrapper {
+.tiff-viewer .tiff-pages div.canvas-wrapper {
     border: 5px solid whitesmoke;
     -webkit-box-shadow: 0px 0px 20px 0px rgba(0,0,0,0.75);
     -moz-box-shadow: 0px 0px 20px 0px rgba(0,0,0,0.75);

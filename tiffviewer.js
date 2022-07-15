@@ -9,6 +9,12 @@ class TiffViewer {
         this._totalPages = 0;
         this._currentPage = 0;
         this._currentAngle = 0;
+        this._fileSize = 0;
+        // _maxFileSize 50Mb in bytes
+        this._maxFileSize = 52428800;
+        this._fileSizeToPrint = "";
+        this._fileExists = false;
+        this._fileIsLoaded = false;
         this._lastZoom = this._initialZoom;
         this._init();
     }
@@ -16,16 +22,13 @@ class TiffViewer {
     _init() {
         this._createInterface();
         this._setDomObjects();
-        this._drawPages();
-        this._bindEvents();
     }
-
-    
 
     _createInterface() {
         this._divTiffViewer.innerHTML = 
             `<div class="tiff-controls">
                 <div class="controls-left">
+                    <small class="filesize"></small>
                 </div>
                 <div class="controls-center">
                     <input type="text" name="page-number" value="0">
@@ -61,12 +64,38 @@ class TiffViewer {
             <div class="tiff-loading hide">
                 <p>Cargando...</p>
             </div>
+            <div class="dialog-container hide">
+                <div class="dialog-content"></div>
+            </div>
             <div class="tiff-pages" data-zoom="${this._initialZoom}">
             </div>`;
     }
 
+    _setDialogContent(content) {
+        this._divDialog.querySelector('div.dialog-content').innerHTML = content;
+    }
+
+    _showDialog() {
+        this._divDialog.classList.remove('hide');
+    }
+
+    _showDialog(content) {
+        this._setDialogContent(content);
+        this._divDialog.classList.remove('hide');
+    }
+
+    _showDialogAlert(title, text) {
+        let content = `<h5 class="title">${title}</h5><div class="body"><p>${text}</p></div>`;
+        this._showDialog(content);
+    }
+
+    _hideDialog() {
+        this._divDialog.classList.add('hide');
+    }
+
     _setDomObjects() {
         this._divLoading = this._divTiffViewer.querySelector(".tiff-loading");
+        this._divDialog = this._divTiffViewer.querySelector(".dialog-container");
         this._divPages = this._divTiffViewer.querySelector(".tiff-pages");
         this._divControls = this._divTiffViewer.querySelector(".tiff-controls");
         this._inputTotalPages = this._divTiffViewer.querySelector("input[name='total-pages']");
@@ -76,6 +105,83 @@ class TiffViewer {
         this._btnZoomIn = this._divTiffViewer.querySelector("button[name='zoomin']");
         this._btnRotateLeft = this._divTiffViewer.querySelector("button[name='rotateleft']");
         this._btnExpandToWidth = this._divTiffViewer.querySelector("button[name='expandtowidth']");
+    }
+
+    _calculateFileSizeToShow(fileSize) {
+        let oneKb = 1024;
+        let oneMb = oneKb * oneKb;
+        let oneGb = oneMb * oneMb;
+        let strFileSize = "";
+        if(fileSize > 0) {
+            if(fileSize > oneGb) {
+                strFileSize = (fileSize / oneGb).toFixed(2) + " GB";
+            } else if(fileSize > oneMb) {
+                strFileSize = (fileSize / oneMb).toFixed(2) + " MB";
+            } else if(fileSize > oneKb) {
+                strFileSize = (fileSize / oneKb).toFixed(2) + " KB";
+            } else {
+                strFileSize = fileSize + " Bytes";
+            }
+        } else {
+            strFileSize = "0 Bytes";
+        }
+        return strFileSize;
+    }
+
+    _getFileSize(url) {
+        return new Promise(function (resolve, reject) {
+            let xhr = new XMLHttpRequest();
+            xhr.open("HEAD", url, true);
+            xhr.onreadystatechange = function() {
+                if (this.readyState == this.DONE) {
+                    if (this.status === 200) {
+                        resolve(parseInt(xhr.getResponseHeader("Content-Length")));
+                    } else {
+                        reject({ status: this.status, statusText: xhr.statusText });
+                    }
+                }
+            };
+            xhr.onerror = function () {
+                reject({ status: this.status, statusText: xhr.statusText });
+            };
+            xhr.send();
+        });
+    }
+
+    async LoadAndShow() {
+        let fileUrl = this._divTiffViewer.dataset.tiffUrl;
+        try {
+            this._fileSize = await this._getFileSize(fileUrl);
+            this._fileSizeToPrint = this._calculateFileSizeToShow(this._fileSize);
+            if(this._fileSize == 0) {
+                this._showDialogAlert('Tiff Viewer',`El archivo no tiene contenido (${this._fileSizeToPrint})`);
+            } else if(this._fileSize > this._maxFileSize) {
+                this._showDialogAlert('Tiff Viewer',`El archivo es demasiado grande para ser visualizado (${this._fileSizeToPrint})`);
+            } else {
+                try {
+                    this._loadFile();
+                    this._fileIsLoaded = true;
+                } catch(err) {
+                    this._showDialogAlert('Tiff Viewer',`Error al cargar el archivo: ${err.message}`);
+                }
+            }
+        } catch(err) {
+            if(err.status === 404) {
+                this._showDialogAlert('Tiff Viewer',"Archivo no encontrado");
+            } else {
+                this._showDialogAlert('Tiff Viewer',`Error cargando archivo: ${err.statusText}`);
+            }
+        }
+    }
+
+    _loadFile() {
+        this._setFileDataOnUI();
+        this._drawPages();
+        this._bindEvents();
+    }
+
+    _setFileDataOnUI() {
+        this._divControls.querySelector('div.controls-left small.filesize').innerHTML = this._fileSizeToPrint;
     }
 
     _drawPages() {
