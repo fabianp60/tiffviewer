@@ -43,7 +43,7 @@
     background-color: black;
     border: none;
     color: whitesmoke;
-    width: 4ch;
+    width: 5ch;
 }
 
 .tiff-controls input[type=text]:focus-visible {
