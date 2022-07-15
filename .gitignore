@@ -1,0 +1,5 @@
+*.tif
+*.tiff
+/images
+/images/*.tif
+/images/*.tiff
