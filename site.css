@@ -16,7 +16,7 @@ div.viewer-wrapper {
     width: 80%;
     height: 480px;
     max-height: calc(100%);
-    padding: 1rem;
+    padding: 0 1rem 1rem 1rem;
     flex-grow: 2;
     box-sizing: border-box;
 }
