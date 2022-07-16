@@ -16,10 +16,12 @@ Download tiff.min.js, tiffviewer.js, tiff.css and load them by yourself:
 <div class="tiff-viewer" data-tiff-url="images/multipage.tiff" data-zoom="30"></div>
 ```
 
-- In javascript, get the tiff-viewer element an pass it to the constructor of the new TiffViewer object
+- In javascript
+  - get the tiff-viewer element and pass it to the constructor of the new TiffViewer object 
+  - call the LoadAndShow method to view the tiff image
 ```js
 let tiffImg = document.querySelector(".tiff-viewer");
-new TiffViewer(tiffImg);
+new TiffViewer(tiffImg).LoadAndShow();
 ```
 
 ## Dependencies
