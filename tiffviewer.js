@@ -227,6 +227,8 @@ class TiffViewer {
 
     _bindEvents() {
         this._inputNumPage.addEventListener("keyup", (event) => { this._onInputNumPage(event); });
+        this._inputNumPage.addEventListener("focusout", (event) => { this._onInputNumPage(event); });
+        this._inputNumPage.addEventListener("keydown", (event) => { this._onInputKeyDownEnter(event); });
         this._inputNumPage.addEventListener("focus", () => { this._onInputNumPageFocus(); });
         this._btnZoomIn.addEventListener("click", () => { this._zoomIn(); });
         this._btnZoomOut.addEventListener("click", () => { this._zoomOut(); });
@@ -234,8 +236,17 @@ class TiffViewer {
         window.addEventListener("resize", () => { this._onWindowResize(); });
         window.addEventListener("orientationchange", () => { this._onWindowOrientationChange(); });
         this._inputZoom.addEventListener("keyup", (event) => { this._onInputZoom(event); });
+        this._inputZoom.addEventListener("focusout", (event) => { this._onInputZoom(event); });
+        this._inputZoom.addEventListener("keydown", (event) => { this._onInputKeyDownEnter(event); });
         this._inputZoom.addEventListener("focus", () => { this._onInputZoomFocus(); });
         this._btnExpandToWidth.addEventListener("click", () => { this._expandToWidth(); });
+    }
+
+    _onInputKeyDownEnter(event) {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            return false;
+        }
     }
 
     _zoomIn() {
