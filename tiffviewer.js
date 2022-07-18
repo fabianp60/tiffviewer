@@ -1,5 +1,7 @@
 class TiffViewer {
     constructor(divTiffViewer, initparams = {zoom: 100, page: 1}) {
+        this._DAO = TiffViewerDB();
+        this._useDB = false;
         this._divTiffViewer = divTiffViewer;
         this._initParams = {zoom: 100, page: 1};
         if ("zoom" in this._divTiffViewer.dataset) {
@@ -17,7 +19,8 @@ class TiffViewer {
             }
         }
         this._lastZoom = this._initParams.zoom;
-        this._maxAroundPagesToShow = 20; // numero de paginas a mostrar antes y despues de la pagina actual
+        this._numPagesInMemoryLimit = 50;
+        this._maxAroundPagesToShow = 5; // numero de paginas a mostrar antes y despues de la pagina actual
         this._tiffContent = { 
             file: {
                 url: "",
@@ -35,7 +38,6 @@ class TiffViewer {
             pages: [] 
         };
         this._init();
-
     }
 
     _init() {
@@ -171,7 +173,17 @@ class TiffViewer {
         });
     }
 
+    async _tryOpenDB() {
+        try {
+            await this._DAO.OpenDatabase();
+            this._useDB = this._DAO.IsOpen();
+        } catch (error) {
+            this._useDB = false;
+        }
+    }
+
     async LoadAndShow() {
+        await _tryOpenDB();
         let fileUrl = this._divTiffViewer.dataset.tiffUrl;
         try {
             this._tiffContent.file.size = await this._getFileSize(fileUrl);
@@ -200,11 +212,26 @@ class TiffViewer {
 
     async _loadFile() {
         this._setFileDataOnUI();
+        this._UpdateDownloadProgressAsync();
         await this._getTiffFileOnMemory(this._divTiffViewer.dataset.tiffUrl);
     }
 
     _setFileDataOnUI() {
         this._divControls.querySelector('div.controls-left small.filesize').innerHTML = this._tiffContent.file.sizeToPrint;
+    }
+
+    async _UpdateDownloadProgressAsync() {
+        while(this._tiffContent.file.downloadProgress < 100) {
+            this._pgDownload.value = this._tiffContent.file.downloadProgress;
+            await this._sleep(100);
+       }
+    }
+
+    async _UpdateLoadProgressAsync() {
+        while(this._tiffContent.file.loadProgress < 100) {
+            this._pgLoad.value = this._tiffContent.file.loadProgress;
+            await this._sleep(100);
+       }
     }
 
     _getTiffFileOnMemory(url) {
@@ -222,7 +249,7 @@ class TiffViewer {
                         let tiff = new Tiff({buffer: buffer});
                         this._tiffContent.totalPages = tiff.countDirectory();
                         for(let i = 0; i < this._tiffContent.totalPages; i++) {
-                            this._tiffContent.pages.push({loaded: false,pagenum:i+1,dataUrl:'',width:0,height:0,showed:false});
+                            this._tiffContent.pages.push({loaded: false,pagenum:i+1,dataUrl:'',width:0,height:0});
                         }
                         this._inputTotalPages.value = this._tiffContent.totalPages;
                         if(this._tiffContent.totalPages > 0) {
@@ -235,7 +262,11 @@ class TiffViewer {
                         this._drawEmptyPages();
                         this._inputNumPage.value = this._tiffContent.currentPage;
                         this._showCurrentPageZone();
-                        this._loadPagesInMemory(tiff);
+                        if(this._tiffContent.totalPages > this._numPagesInMemoryLimit) {
+                            this._loadPagesInDatabase(tiff);
+                        } else {
+                            this._loadPagesInMemory(tiff);
+                        }
                         resolve(true);
                     } catch(err) {
                         reject({status: "Error", statusText: err.message});
@@ -249,7 +280,6 @@ class TiffViewer {
             };
             xhr.onprogress = function (e) {
                 this._tiffContent.file.downloadProgress = Math.floor((e.loaded / e.total) * 100);
-                this._pgDownload.value = this._tiffContent.file.downloadProgress;
             }.bind(this);
             xhr.send();
         }.bind(this));
@@ -263,7 +293,6 @@ class TiffViewer {
             this._tiffContent.pages[i].width = tiff.width();
             this._tiffContent.pages[i].height = tiff.height();
             this._tiffContent.file.loadProgress = Math.floor(((i + 1) / this._tiffContent.totalPages) * 100);
-            this._pgLoad.value = this._tiffContent.file.loadProgress;
             this._tiffContent.isLoaded = true;
         }
     }
@@ -492,5 +521,189 @@ class TiffViewer {
           return true;
         }
         return false;
+    }
+}
+
+
+class TiffViewerDB {
+    constructor() {
+        this._localDB = {
+            db: null,
+            db_is_open: false,
+            version: 1,
+            databaseName: 'tiffviewer_db',
+            tables_config: this._parameterizeTables(),
+            tables: [],
+            dbOpenRequest: null,
+            sucess: false
+        };
+        this._dbSupported = false;
+        this._initIndexedDBAccessObjects();
+        if(this.indexedDB) {
+            this._dbSupported = true;
+        }
+    }
+
+    IsIndexedDBSupported() {
+        return this._dbSupported;
+    }
+
+    _parameterizeTables() {
+        return [
+            {
+                tableName: 'tiff_image', 
+                keyOptions: {keyPath: "id", autoIncrement: true},
+                indexes: [
+                    {name: "url", index_options: {unique: true}},
+                    {name: "size", index_options: {unique: false}},
+                    {name: "totalPages", index_options: {unique: false}},
+                    {name: "lastUsed", index_options: {unique: false}}
+                ]
+            },
+            {
+                tableName: 'tiff_page',
+                keyOptions: {keyPath: "id", autoIncrement: true},
+                indexes: [
+                    {name: "imgid", index_options: {unique: false}},
+                    {name: "pagenum", index_options: {unique: false}}
+                ]
+            }
+        ];
+    }
+
+    _initIndexedDBAccessObjects() {
+        this.indexedDB = window.indexedDB || window.mozIndexedDB || window.webkitIndexedDB || window.msIndexedDB;
+        this.IDBTransaction = window.IDBTransaction || window.webkitIDBTransaction || window.msIDBTransaction;
+        this.IDBKeyRange = window.IDBKeyRange || window.webkitIDBKeyRange || window.msIDBKeyRange;
+    }
+
+    OpenDatabase() {
+        return new Promise((resolve, reject) => {
+            if(this._dbSupported) {
+                let db = this._localDB;
+                this._localDB.dbOpenRequest = this.indexedDB.open(db.databaseName, db.version);
+                this._localDB.dbOpenRequest.onupgradeneeded = this._onUpgradeNeeded.bind(this);
+                this._localDB.dbOpenRequest.onsuccess = function(evt) {
+                    this._localDB.db = this._localDB.dbOpenRequest.result || evt.target.result;
+                    this._localDB.db_is_open = true;
+                    resolve({status:"success", value: true});
+                }.bind(this);
+                this._localDB.dbOpenRequest.onerror = function(err) {
+                    this._localDB.db_is_open = false;
+                    reject({status:"error", value: err.message});
+                }.bind(this);
+            }
+        });
+    }
+
+    IsOpen() {
+        return this._localDB.db_is_open;
+    }
+
+    _onUpgradeNeeded(evt) {
+        this._localDB.db = evt.target.result;
+        let db = this._localDB.db;
+        // Crear tablas
+        if(!this._localDB.db.objectStoreNames.contains(this._localDB.databaseName)) {
+            for (let table_idx = 0; table_idx < this._localDB.tables_config.length; table_idx++) {
+                const table_config = this._localDB.tables_config[table_idx];
+                let store = db.createObjectStore(table_config.tableName, table_config.keyOptions);
+                for (let col_idx = 0; col_idx < table_config.indexes.length; col_idx++) {
+                    store.createIndex(`idx_${table_config.indexes[col_idx].name}`, table_config.indexes[col_idx].name, table_config.indexes[col_idx].index_options);
+                }
+                this._localDB.tables[table_config.tableName] = store;
+            }
+        }
+    }
+
+    SelectAllAsync(tableName) {
+        return new Promise((resolve, reject) => {
+            if(this._localDB.db_is_open) {
+                let transaction = this._localDB.db.transaction(tableName, 'readonly');
+                let store = transaction.objectStore(tableName);
+                let request = store.getAll();
+                request.onsuccess = (evt) => {
+                    resolve({status:"success", value: evt.target.result});
+                }
+                request.onerror = (err) => {
+                    reject({status:"error", value: err.target.error.message});
+                }
+            } else {
+                reject({status:"error", value: 'Base de datos no abierta'});
+            }
+        });
+    }
+
+    SelectByIndexAsync(tableName, byindex, key) {
+        return new Promise(function (resolve, reject) {
+            if(this._localDB.db_is_open) {
+                let transaction = this._localDB.db.transaction(tableName, 'readonly');
+                let store = transaction.objectStore(tableName);
+                let index = store.index(byindex);
+                let request = index.get(key);
+                request.onsuccess = (evt) => {
+                    resolve({status:"success", value: evt.target.result});
+                }
+                request.onerror = (err) => {
+                    reject({status:"error", value: err.target.error.message});
+                }
+            } else {
+                reject({status:"error", value: 'Base de datos no abierta'});
+            }
+        }.bind(this));
+    }
+
+    InsertAsync(tableName, obj) {
+        return new Promise((resolve, reject) => {
+            if(this._localDB.db_is_open) {
+                let transaction = this._localDB.db.transaction(tableName, 'readwrite');
+                let store = transaction.objectStore(tableName);
+                let request = store.add(obj);
+                request.onsuccess = (evt) => {
+                    resolve({status:"success", value: evt.target.result});
+                }
+                request.onerror = (err) => {
+                    reject({status:"error", value: err.target.error.message});
+                }
+            } else {
+                reject({status:"error", value: 'Base de datos no abierta'});
+            }
+        });
+    }
+
+    DeleteAsync(tableName, key) {
+        return new Promise((resolve, reject) => {
+            if(this._localDB.db_is_open) {
+                let transaction = this._localDB.db.transaction(tableName, 'readwrite');
+                let store = transaction.objectStore(tableName);
+                let request = store.delete(key);
+                request.onsuccess = (evt) => {
+                    resolve({status:"success", value: evt.target.result});
+                }
+                request.onerror = (err) => {
+                    reject({status:"error", value: err.target.error.message});
+                }
+            } else {
+                reject({status:"error", value: 'Base de datos no abierta'});
+            }
+        });
+    }
+
+    UpdateAsync(tableName, obj) {
+        return new Promise((resolve, reject) => {
+            if(this._localDB.db_is_open) {
+                let transaction = this._localDB.db.transaction(tableName, 'readwrite');
+                let store = transaction.objectStore(tableName);
+                let request = store.put(obj);
+                request.onsuccess = (evt) => {
+                    resolve({status:"success", value: evt.target.result});
+                }
+                request.onerror = (err) => {
+                    reject({status:"error", value: err.target.error.message});
+                }
+            } else {
+                reject({status:"error", value: 'Base de datos no abierta'});
+            }
+        });
     }
 }
