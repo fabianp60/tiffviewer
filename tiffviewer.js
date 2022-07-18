@@ -34,7 +34,6 @@ class TiffViewer {
             currentAngle: 0, 
             pages: [] 
         };
-        this._tiffObject;
         this._init();
 
     }
@@ -218,11 +217,13 @@ class TiffViewer {
             xhr.onload = function (e) {
                 this._divLoading.classList.add("hide");
                 if (xhr.status === 200) {
-                    let buffer = xhr.response;
                     try {
-                        this._tiffObject = new Tiff({buffer: buffer});
-                        this._tiffContent.totalPages = this._tiffObject.countDirectory();
-                        this._tiffContent.pages = new Array(this._tiffContent.totalPages).fill({loaded: false,pagenum:0,dataUrl:'',width:0,height:0,showed:false});
+                        let buffer = xhr.response;
+                        let tiff = new Tiff({buffer: buffer});
+                        this._tiffContent.totalPages = tiff.countDirectory();
+                        for(let i = 0; i < this._tiffContent.totalPages; i++) {
+                            this._tiffContent.pages.push({loaded: false,pagenum:i+1,dataUrl:'',width:0,height:0,showed:false});
+                        }
                         this._inputTotalPages.value = this._tiffContent.totalPages;
                         if(this._tiffContent.totalPages > 0) {
                             if(this._initParams.page <= this._tiffContent.totalPages && this._initParams.page > 0) {
@@ -234,19 +235,20 @@ class TiffViewer {
                         this._drawEmptyPages();
                         this._inputNumPage.value = this._tiffContent.currentPage;
                         this._showCurrentPageZone();
-                        for (let npage = 0; npage < this._tiffContent.totalPages; npage++) {
-                            if(!this._tiffContent.pages[npage].loaded) {
-                                this._tiffObject.setDirectory(npage);
-                                this._tiffContent.pages[npage].loaded = true;
-                                this._tiffContent.pages[npage].pagenum = npage + 1;
-                                this._tiffContent.pages[npage].dataUrl = this._tiffObject.toCanvas().toDataURL("image/png"), 
-                                this._tiffContent.pages[npage].width = this._tiffObject.width();
-                                this._tiffContent.pages[npage].height = this._tiffObject.height();
-                            }
-                            this._tiffContent.file.loadProgress = Math.floor(((npage + 1) / this._tiffContent.totalPages) * 100);
+                        for (let i = 0, len = this._tiffContent.totalPages; i < len; ++i) {
+                            let numpage = i + 1;
+                            console.log(i);
+                            tiff.setDirectory(i);
+                            this._tiffContent.pages[i].loaded = true;
+                            this._tiffContent.pages[i].pagenum = numpage;
+                            this._tiffContent.pages[i].dataUrl = tiff.toCanvas().toDataURL(), 
+                            this._tiffContent.pages[i].width = tiff.width();
+                            this._tiffContent.pages[i].height = tiff.height();
+                            this._tiffContent.file.loadProgress = Math.floor(((i + 1) / this._tiffContent.totalPages) * 100);
                             this._pgLoad.value = this._tiffContent.file.loadProgress;
                             this._tiffContent.isLoaded = true;
                         }
+                        console.log(this._tiffContent.pages);
                         resolve(true);
                     } catch(err) {
                         reject({status: "Error", statusText: err.message});
@@ -476,6 +478,7 @@ class TiffViewer {
                 let paginaVisible = parseInt(entry.target.innerHTML);
                 this._tiffContent.currentPage = paginaVisible;
                 this._inputNumPage.value = this._tiffContent.currentPage;
+                this._showCurrentPageZone();
             }
         });
     }
