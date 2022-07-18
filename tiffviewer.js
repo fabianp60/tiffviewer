@@ -226,7 +226,7 @@ class TiffViewer {
                         }
                         this._inputTotalPages.value = this._tiffContent.totalPages;
                         if(this._tiffContent.totalPages > 0) {
-                            if(this._initParams.page <= this._tiffContent.totalPages && this._initParams.page > 0) {
+                            if(this._initParams.page > 0 && this._initParams.page <= this._tiffContent.totalPages) {
                                 this._tiffContent.currentPage = this._initParams.page;
                             } else {
                                 this._tiffContent.currentPage = 1;
@@ -235,20 +235,7 @@ class TiffViewer {
                         this._drawEmptyPages();
                         this._inputNumPage.value = this._tiffContent.currentPage;
                         this._showCurrentPageZone();
-                        for (let i = 0, len = this._tiffContent.totalPages; i < len; ++i) {
-                            let numpage = i + 1;
-                            console.log(i);
-                            tiff.setDirectory(i);
-                            this._tiffContent.pages[i].loaded = true;
-                            this._tiffContent.pages[i].pagenum = numpage;
-                            this._tiffContent.pages[i].dataUrl = tiff.toCanvas().toDataURL(), 
-                            this._tiffContent.pages[i].width = tiff.width();
-                            this._tiffContent.pages[i].height = tiff.height();
-                            this._tiffContent.file.loadProgress = Math.floor(((i + 1) / this._tiffContent.totalPages) * 100);
-                            this._pgLoad.value = this._tiffContent.file.loadProgress;
-                            this._tiffContent.isLoaded = true;
-                        }
-                        console.log(this._tiffContent.pages);
+                        this._loadPagesInMemory(tiff);
                         resolve(true);
                     } catch(err) {
                         reject({status: "Error", statusText: err.message});
@@ -266,6 +253,19 @@ class TiffViewer {
             }.bind(this);
             xhr.send();
         }.bind(this));
+    }
+
+    async _loadPagesInMemory(tiff) {
+        for (let i = 0, len = this._tiffContent.totalPages; i < len; ++i) {
+            tiff.setDirectory(i);
+            this._tiffContent.pages[i].loaded = true;
+            this._tiffContent.pages[i].dataUrl = tiff.toCanvas().toDataURL(), 
+            this._tiffContent.pages[i].width = tiff.width();
+            this._tiffContent.pages[i].height = tiff.height();
+            this._tiffContent.file.loadProgress = Math.floor(((i + 1) / this._tiffContent.totalPages) * 100);
+            this._pgLoad.value = this._tiffContent.file.loadProgress;
+            this._tiffContent.isLoaded = true;
+        }
     }
 
     _drawEmptyPages() {
