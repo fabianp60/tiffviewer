@@ -1,6 +1,6 @@
 class TiffViewer {
     constructor(divTiffViewer, initparams = {zoom: 100, page: 1}) {
-        this._DAO = new TiffViewerDB();
+        this._DAO = new TiffViewerDB('local_tiffviewer_db');
         this._divTiffViewer = divTiffViewer;
         this._initParams = {zoom: 100, page: 1};
         if ("zoom" in this._divTiffViewer.dataset) {
@@ -38,6 +38,7 @@ class TiffViewer {
         this._tiffContent = { 
             file: {
                 url: this._divTiffViewer.dataset.tiffUrl,
+                fileName: this._getFileName(this._divTiffViewer.dataset.tiffUrl),
                 size: 0, // in bytes
                 maxSize: 52428800, // in bytes {50MB: 52428800, 600MB: 629145600, 300MB: 314572800}
                 sizeToPrint: "",
@@ -95,7 +96,9 @@ class TiffViewer {
                         </svg>
                     </button>
                 </div>
-                <div class="controls-right"></div>
+                <div class="controls-right">
+                    <small class="filename"></small>
+                </div>
             </div>
             <div class="tiff-progress">
                 <progress value="0" name="pg-download" max="100"></progress>
@@ -188,6 +191,11 @@ class TiffViewer {
         });
     }
 
+    _getFileName(url) {
+        let fileName = url.split("/").pop();
+        return fileName;
+    }
+
     async _tryOpenDB() {
         try {
             await this._DAO.OpenDatabase();
@@ -209,9 +217,18 @@ class TiffViewer {
                 let date_now = Date.now();
                 for(let i = 0; i < images.length; i++) {
                     let image = images[i];
-                    if(image.url != this._tiffContent.file.url) {
+                    if(this._getFileName(image.url) != this._tiffContent.file.fileName) {
                         let num_days = this._calcNumDays(date_now, images[i].lastUsed);
                         if(num_days > this._maxDaysInBD) {
+                            // delete image pages from database
+                            try {
+                                let delete_result = await this._DAO.DeleteByIndexAsync(this._tiff_page_table,'idx_imgid', image.id);
+                                if(delete_result.status != 'success') {
+                                    console.log('No se pudo eliminar las paginas de la imagen ' + image.url);
+                                }
+                            } catch {
+                                console.log('No se pudo eliminar las paginas de la imagen ' + image.url);
+                            }
                             let result = await this._DAO.DeleteAsync(this._tiff_imag_table, image.id);
                             if(result.status != 'success') {
                                 console.log('No se pudo eliminar la imagen ' + image.url);
@@ -277,6 +294,7 @@ class TiffViewer {
 
     _setFileDataOnUI() {
         this._divControls.querySelector('div.controls-left small.filesize').innerHTML = this._tiffContent.file.sizeToPrint;
+        this._divControls.querySelector('div.controls-right small.filename').innerHTML = this._tiffContent.file.fileName;
     }
 
     async _UpdateDownloadProgressAsync() {
@@ -369,7 +387,7 @@ class TiffViewer {
 
     async _loadPagesInDatabase(tiff) {
         let promises = [];
-        let tiff_image = { url: this._tiffContent.file.url, size: this._tiffContent.file.size, totalPages: this._tiffContent.totalPages, lastUsed: Date.now() };
+        let tiff_image = { fileName: this._tiffContent.file.fileName, url: this._tiffContent.file.url, size: this._tiffContent.file.size, totalPages: this._tiffContent.totalPages, lastUsed: Date.now() };
         let imageInserted = await this._insertTiffImage(tiff_image);
         if(imageInserted) {
             for(let i = 0; i < this._tiffContent.totalPages; i++) {
@@ -398,7 +416,7 @@ class TiffViewer {
     async _insertTiffImage(tiff_image) {
         let inserted = false;
         try {
-            let timg_result = await this._DAO.SelectByIndexAsync(this._tiff_imag_table, 'idx_url', tiff_image.url);
+            let timg_result = await this._DAO.SelectByIndexAsync(this._tiff_imag_table, 'idx_fileName', tiff_image.fileName);
             if(timg_result.status == 'success') {
                 if(timg_result.value) {
                     tiff_image.id = timg_result.value.id;
@@ -759,12 +777,12 @@ class TiffViewer {
 
 
 class TiffViewerDB {
-    constructor() {
+    constructor(dbName) {
         this._localDB = {
             db: null,
             db_is_open: false,
             version: 1,
-            databaseName: 'tiffviewer_db',
+            databaseName: dbName,
             tables_config: this._parameterizeTables(),
             tables: [],
             dbOpenRequest: null,
@@ -787,10 +805,12 @@ class TiffViewerDB {
                 tableName: 'tiff_image', 
                 keyOptions: {keyPath: "id", autoIncrement: true},
                 indexes: [
-                    {idxname:"idx_url", name: "url", index_options: {unique: true}},
+                    {idxname:"idx_fileName", name: "fileName", index_options: {unique: true}},
+                    {idxname:"idx_url", name: "url", index_options: {unique: false}},
                     {idxname:"idx_size", name: "size", index_options: {unique: false}},
                     {idxname:"idx_totalPages", name: "totalPages", index_options: {unique: false}},
-                    {idxname:"idx_lastUsed", name: "lastUsed", index_options: {unique: false}}
+                    {idxname:"idx_lastUsed", name: "lastUsed", index_options: {unique: false}},
+                    {idxname:"idx_fileName_size", name: ["fileName","size"], index_options: {unique: false}}
                 ]
             },
             {
@@ -921,6 +941,25 @@ class TiffViewerDB {
                 reject({status:"error", value: 'Base de datos no abierta'});
             }
         });
+    }
+
+    DeleteByIndexAsync(tableName, byindex, key) {
+        return new Promise(function (resolve, reject) {
+            if(this._localDB.db_is_open) {
+                let transaction = this._localDB.db.transaction(tableName, 'readwrite');
+                let store = transaction.objectStore(tableName);
+                let index = store.index(byindex);
+                let request = index.delete(key);
+                request.onsuccess = (evt) => {
+                    resolve({status:"success", value: evt.target.result});
+                }
+                request.onerror = (err) => {
+                    reject({status:"error", value: err.target.error.message});
+                }
+            } else {
+                reject({status:"error", value: 'Base de datos no abierta'});
+            }
+        }.bind(this));
     }
 
     UpdateAsync(tableName, obj) {
