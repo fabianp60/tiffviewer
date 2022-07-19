@@ -1,7 +1,6 @@
 class TiffViewer {
     constructor(divTiffViewer, initparams = {zoom: 100, page: 1}) {
-        this._DAO = TiffViewerDB();
-        this._useDB = false;
+        this._DAO = new TiffViewerDB();
         this._divTiffViewer = divTiffViewer;
         this._initParams = {zoom: 100, page: 1};
         if ("zoom" in this._divTiffViewer.dataset) {
@@ -18,12 +17,27 @@ class TiffViewer {
                 this._initParams.page = initparams.page;
             }
         }
+        // nombres de tablas e indices
+        this._tiff_imag_table = 'tiff_image';
+        this._tiff_page_table = 'tiff_page';
+        this._idx_imgid_pagenum = 'idx_imgid_pagenum';
         this._lastZoom = this._initParams.zoom;
-        this._numPagesInMemoryLimit = 50;
-        this._maxAroundPagesToShow = 5; // numero de paginas a mostrar antes y despues de la pagina actual
+        // ayuda a determinar si se cargan todas las imagenes en memoria o en BD
+        this._numPagesInMemoryLimit = 30;
+        // numero de paginas a mostrar antes y despues de la pagina actual 
+        // si se supera el limite de  _numPagesInMemoryLimit
+        this._maxAroundPagesToShow = 5;
+        // indica si indexedDB está disponible
+        this._canUseDB = false;
+        // indica si se usará BD o si se cargara todo en memoria
+        this._usingDatabase = false;
+        // indica si se mostraron todas las paginas (solo si se cargan todas en memoria)
+        this._allPagesInMemoryShowed = false;
+        // indica el maximo numero de dias que se puede guardar una imagen en BD
+        this._maxDaysInBD = 3;
         this._tiffContent = { 
             file: {
-                url: "",
+                url: this._divTiffViewer.dataset.tiffUrl,
                 size: 0, // in bytes
                 maxSize: 52428800, // in bytes {50MB: 52428800, 600MB: 629145600, 300MB: 314572800}
                 sizeToPrint: "",
@@ -35,7 +49,8 @@ class TiffViewer {
             totalPages: 0, 
             currentPage: 0, 
             currentAngle: 0, 
-            pages: [] 
+            pages: [],
+            imgid: 0 
         };
         this._init();
     }
@@ -176,31 +191,67 @@ class TiffViewer {
     async _tryOpenDB() {
         try {
             await this._DAO.OpenDatabase();
-            this._useDB = this._DAO.IsOpen();
+            this._canUseDB = this._DAO.IsOpen();
+            if(this._canUseDB) {
+                await this._cleanOldImagesFromDataBase();
+            }
         } catch (error) {
-            this._useDB = false;
+            this._canUseDB = false;
+            console.log('No se puede usar la idxDB', error);
         }
     }
 
-    async LoadAndShow() {
-        await _tryOpenDB();
-        let fileUrl = this._divTiffViewer.dataset.tiffUrl;
+    async _cleanOldImagesFromDataBase() {
         try {
-            this._tiffContent.file.size = await this._getFileSize(fileUrl);
+            let images_result = await this._DAO.SelectAllAsync(this._tiff_imag_table);
+            if(images_result.status == 'success') {
+                let images = images_result.value;
+                let date_now = Date.now();
+                for(let i = 0; i < images.length; i++) {
+                    let image = images[i];
+                    if(image.url != this._tiffContent.file.url) {
+                        let num_days = this._calcNumDays(date_now, images[i].lastUsed);
+                        if(num_days > this._maxDaysInBD) {
+                            let result = await this._DAO.DeleteAsync(this._tiff_imag_table, image.id);
+                            if(result.status != 'success') {
+                                console.log('No se pudo eliminar la imagen ' + image.url);
+                            }
+                        }
+                    } else {
+                        // update lastUsed
+                        image.lastUsed = date_now;
+                        let result = await this._DAO.UpdateAsync(this._tiff_imag_table, image);
+                        if(result.status != 'success') {
+                            console.log('No se pudo actualizar la fecha de uso de la imagen ' + image.url);
+                        }
+                    }
+                }
+            } else {
+                console.log('Error al obtener las imagenes de la base de datos', images_result.value);
+            }
+        } catch(err) {
+            console.log('Error al limpiar la base de datos', err);
+        }
+    }
+
+    _calcNumDays(date1, date2) {
+        let oneDay = 24 * 3600 * 1000;
+        let diffDays = Math.round(Math.abs((date2 - date1) / (oneDay)));
+        return diffDays;
+    }
+
+    async LoadAndShow() {
+        await this._tryOpenDB();
+        try {
+            this._tiffContent.file.size = await this._getFileSize(this._tiffContent.file.url);
             this._tiffContent.file.sizeToPrint = this._calculateFileSizeToShow(this._tiffContent.file.size);
             if(this._tiffContent.file.size == 0) {
                 this._showDialogAlert('Tiff Viewer',`El archivo no tiene contenido (${this._tiffContent.file.sizeToPrint})`);
             } else if(this._tiffContent.file.size > this._tiffContent.file.maxSize) {
                 this._showDialogAlert('Tiff Viewer',`El archivo es demasiado grande para ser visualizado (${this._tiffContent.file.sizeToPrint})`);
             } else {
-                try {
-                    await this._loadFile();
-                } catch(err) {
-                    this._showDialogAlert('Tiff Viewer',`Error al cargar el archivo: ${err.statusText}`);
-                    console.error(err);
-                }
+                this._loadFile();
             }
-            this._tiffContent.file.exists = true;
         } catch(err) {
             if(err.status === 404) {
                 this._showDialogAlert('Tiff Viewer',"Archivo no encontrado");
@@ -211,9 +262,17 @@ class TiffViewer {
     }
 
     async _loadFile() {
-        this._setFileDataOnUI();
-        this._UpdateDownloadProgressAsync();
-        await this._getTiffFileOnMemory(this._divTiffViewer.dataset.tiffUrl);
+        try {
+            let promises = [];
+            this._setFileDataOnUI();
+            promises.push(this._UpdateDownloadProgressAsync());
+            promises.push(this._UpdateLoadProgressAsync());
+            promises.push(this._getTiffFileOnMemory(this._divTiffViewer.dataset.tiffUrl));
+            await Promise.all(promises);
+        } catch(err) {
+            this._showDialogAlert('Tiff Viewer',`Error al cargar el archivo: ${err.statusText}`);
+            console.error(err);
+        }
     }
 
     _setFileDataOnUI() {
@@ -223,15 +282,17 @@ class TiffViewer {
     async _UpdateDownloadProgressAsync() {
         while(this._tiffContent.file.downloadProgress < 100) {
             this._pgDownload.value = this._tiffContent.file.downloadProgress;
-            await this._sleep(100);
+            await this._sleep(250);
        }
+       this._pgDownload.value = this._tiffContent.file.downloadProgress;
     }
 
     async _UpdateLoadProgressAsync() {
         while(this._tiffContent.file.loadProgress < 100) {
             this._pgLoad.value = this._tiffContent.file.loadProgress;
-            await this._sleep(100);
+            await this._sleep(250);
        }
+       this._pgLoad.value = this._tiffContent.file.loadProgress;
     }
 
     _getTiffFileOnMemory(url) {
@@ -242,36 +303,57 @@ class TiffViewer {
             xhr.responseType = 'arraybuffer';
             xhr.open("GET", url, true);
             xhr.onload = function (e) {
-                this._divLoading.classList.add("hide");
                 if (xhr.status === 200) {
                     try {
                         let buffer = xhr.response;
                         let tiff = new Tiff({buffer: buffer});
                         this._tiffContent.totalPages = tiff.countDirectory();
-                        for(let i = 0; i < this._tiffContent.totalPages; i++) {
-                            this._tiffContent.pages.push({loaded: false,pagenum:i+1,dataUrl:'',width:0,height:0});
-                        }
-                        this._inputTotalPages.value = this._tiffContent.totalPages;
                         if(this._tiffContent.totalPages > 0) {
-                            if(this._initParams.page > 0 && this._initParams.page <= this._tiffContent.totalPages) {
-                                this._tiffContent.currentPage = this._initParams.page;
-                            } else {
-                                this._tiffContent.currentPage = 1;
+                            this._usingDatabase = false;
+                            if(this._tiffContent.totalPages > this._numPagesInMemoryLimit) {
+                                if(this._canUseDB) {
+                                    this._usingDatabase = true;
+                                } 
                             }
-                        }
-                        this._drawEmptyPages();
-                        this._inputNumPage.value = this._tiffContent.currentPage;
-                        this._showCurrentPageZone();
-                        if(this._tiffContent.totalPages > this._numPagesInMemoryLimit) {
-                            this._loadPagesInDatabase(tiff);
+
+                            for(let i = 0; i < this._tiffContent.totalPages; i++) {
+                                this._tiffContent.pages.push({pagenum:i+1,dataUrl:'',width:0,height:0, lastTimeViewed:Infinity});
+                            }
+                            this._inputTotalPages.value = this._tiffContent.totalPages;
+                            if(this._tiffContent.totalPages > 0) {
+                                if(this._initParams.page > 0 && this._initParams.page <= this._tiffContent.totalPages) {
+                                    this._tiffContent.currentPage = this._initParams.page;
+                                } else {
+                                    this._tiffContent.currentPage = 1;
+                                }
+                            }
+                            this._drawEmptyPages();
+                            this._inputNumPage.value = this._tiffContent.currentPage;
+                            // mostrara las paginas cuando estén disponibles en memoria
+                            this._showCurrentPageZone().then(function() {
+                                // Registra los eventos
+                                this._bindEvents();
+                                this._divLoading.classList.add("hide");
+                            }.bind(this));
+                            if(this._usingDatabase) {
+                                // la siguiente instrucción es async así que continuará sin importar no haber terminado
+                                this._loadPagesInDatabase(tiff);
+                            } else {
+                                // la siguiente instrucción es async así que continuará sin importar no haber terminado
+                                this._loadPagesInMemory(tiff);
+                            }
+                            
+                            tiff = null;
+                            resolve(true);
                         } else {
-                            this._loadPagesInMemory(tiff);
+                            this._divLoading.classList.add("hide");
+                            this._showDialogAlert('Tiff Viewer',`El archivo no tiene paginas`);
                         }
-                        resolve(true);
                     } catch(err) {
                         reject({status: "Error", statusText: err.message});
                     }
                 } else {
+                    this._divLoading.classList.add("hide");
                     reject({ status: xhr.status, statusText: xhr.statusText });
                 }
             }.bind(this);
@@ -285,16 +367,101 @@ class TiffViewer {
         }.bind(this));
     }
 
+    async _loadPagesInDatabase(tiff) {
+        let promises = [];
+        let tiff_image = { url: this._tiffContent.file.url, size: this._tiffContent.file.size, totalPages: this._tiffContent.totalPages, lastUsed: Date.now() };
+        let imageInserted = await this._insertTiffImage(tiff_image);
+        if(imageInserted) {
+            for(let i = 0; i < this._tiffContent.totalPages; i++) {
+                tiff.setDirectory(i);
+                let tiff_page = structuredClone(this._tiffContent.pages[i]);
+                tiff_page.dataUrl = tiff.toCanvas().toDataURL(), 
+                tiff_page.width = tiff.width();
+                tiff_page.height = tiff.height();
+                this._tiffContent.file.loadProgress = Math.floor((i / this._tiffContent.totalPages) * 100);
+                promises.push(this._loadPageInDatabase(this._tiffContent.imgid, tiff_page));
+            }
+            await Promise.all(promises);
+            this._tiffContent.isLoaded = true;
+        } else {
+            if(this._tiffContent.imgid > 0) {
+                // TODO: validar si se deben cargar paginas faltantes y cargarlas en BD
+                this._tiffContent.isLoaded = true;
+            } else {
+                this._showDialogAlert('Tiff Viewer',`Error durante el cargue del archivo (idxDB)`);
+            }
+        }
+        tiff = null;
+        this._tiffContent.file.loadProgress = 100;
+    }
+
+    async _insertTiffImage(tiff_image) {
+        let inserted = false;
+        try {
+            let timg_result = await this._DAO.SelectByIndexAsync(this._tiff_imag_table, 'idx_url', tiff_image.url);
+            if(timg_result.status == 'success') {
+                if(timg_result.value) {
+                    tiff_image.id = timg_result.value.id;
+                    this._tiffContent.imgid = timg_result.value.id;
+                } 
+                else {
+                    let tiff_img_insert = await this._DAO.InsertAsync(this._tiff_imag_table, tiff_image);
+                    if(tiff_img_insert.status == 'success') {
+                        this._tiffContent.imgid = tiff_img_insert.value;
+                        inserted = true;
+                    }
+                }
+            }
+        } catch(err) {
+            console.error(`La imagen ${tiff_image.url} no se pudo insertar`, err);
+        }
+        return inserted;
+    }
+
+    async _loadPageInDatabase(tiff_img_id, tiff_page) {
+        let pageLoaded = false;
+        let maxTrys = 2, trynum = 0;
+        while(!pageLoaded && trynum < maxTrys) {
+            trynum++;
+            try {
+                if(tiff_img_id) {
+                    if(tiff_img_id > 0) {
+                        tiff_page["imgid"] = tiff_img_id;
+                        let tiff_page_result = await this._DAO.SelectByIndexAsync(this._tiff_page_table, this._idx_imgid_pagenum, IDBKeyRange.only([tiff_img_id, tiff_page.pagenum]));
+                        if(tiff_page_result.status == 'success') {
+                            if(tiff_page_result.value) {
+                                pageLoaded = true;
+                            } else {
+                                let tiff_page_insert = await this._DAO.InsertAsync(this._tiff_page_table, tiff_page);
+                                if(tiff_page_insert.status == 'success') {
+                                    pageLoaded = true;
+                                }
+                            }
+                        } else {
+                            let tiff_page_insert = await this._DAO.InsertAsync(this._tiff_page_table, tiff_page);
+                            if(tiff_page_insert.status == 'success') {
+                                pageLoaded = true;
+                            }
+                        }
+                    }
+                }
+            } catch(err) {
+                console.error(`Load in DB of page ${tiff_page.pagenum} fails`, err);
+            }
+        }
+        return pageLoaded;
+    }
+
     async _loadPagesInMemory(tiff) {
         for (let i = 0, len = this._tiffContent.totalPages; i < len; ++i) {
             tiff.setDirectory(i);
-            this._tiffContent.pages[i].loaded = true;
             this._tiffContent.pages[i].dataUrl = tiff.toCanvas().toDataURL(), 
             this._tiffContent.pages[i].width = tiff.width();
             this._tiffContent.pages[i].height = tiff.height();
             this._tiffContent.file.loadProgress = Math.floor(((i + 1) / this._tiffContent.totalPages) * 100);
-            this._tiffContent.isLoaded = true;
         }
+        this._tiffContent.isLoaded = true;
+        tiff = null;
     }
 
     _drawEmptyPages() {
@@ -312,44 +479,110 @@ class TiffViewer {
             this._divPages.appendChild(div.firstChild);
         }
         this._setZoom(this._initParams.zoom);
-        this._bindPageObserver();
-        this._bindEvents();
     }
 
     async _showCurrentPageZone() {
         if(this._tiffContent.totalPages > 0) {
             if(this._tiffContent.currentPage > 0 && this._tiffContent.currentPage <= this._tiffContent.totalPages) {
-                let start = this._tiffContent.currentPage - this._maxAroundPagesToShow;
-                let end = this._tiffContent.currentPage + this._maxAroundPagesToShow;
-                let pageStart = start > 0 ? start : 1;
-                let pageEnd = end <= this._tiffContent.totalPages ? end : this._tiffContent.totalPages;
-                for (let npage = pageStart; npage <= pageEnd; npage++) {
-                    this._showNumPage(npage);
+                if(this._usingDatabase) {
+                    await this._showCurrentPageZoneFromDB();
+                } else {
+                    await this._showCurrentPageZoneFromMemory();
                 }
             }
         }
     }
 
-    async _showNumPage(numpage) {
-        if(this._tiffContent.totalPages > 0) {
-            if(numpage > 0 && numpage <= this._tiffContent.totalPages) {
-                let pageindex = numpage - 1;
-                let page = this._divPages.querySelector(`div.tiff-page[data-page="${numpage}"]`);
-                if(page) {
-                    let divImg = page.querySelector(`div.tiff-image`);
-                    let imgTag = page.querySelector(`div.tiff-image img`);
-                    if(divImg) {
-                        if(!imgTag) {
-                            divImg.innerHTML = '<div class="lds-dual-ring"></div>';
-                            while(!this._tiffContent.pages[pageindex].loaded) {
-                                await this._sleep(250);
+    async _showCurrentPageZoneFromDB() {
+        // mostrar las paginas en el rango de la pagina actual
+        let start = this._tiffContent.currentPage - this._maxAroundPagesToShow;
+        let end = this._tiffContent.currentPage + this._maxAroundPagesToShow;
+        let pageStart = start > 0 ? start : 1;
+        let pageEnd = end <= this._tiffContent.totalPages ? end : this._tiffContent.totalPages;
+        let promises = [];
+        for(let i = pageStart; i <= pageEnd; i++) {
+            promises.push(this._showPageFromDB(i));
+        }
+        await Promise.all(promises);  
+    }
+
+    async _showPageFromDB(numpage) {
+        let page = this._divPages.querySelector(`div.tiff-page[data-page="${numpage}"]`);
+        let pagObj = this._tiffContent.pages.find(page => page.pagenum == numpage);
+
+        if(page) {
+            let divImg = page.querySelector(`div.tiff-image`);
+            let imgTag = page.querySelector(`div.tiff-image img`);
+            if(divImg) {
+                if(!imgTag) {
+                    divImg.innerHTML = '<div class="lds-dual-ring"></div>';
+                    if(pagObj.dataUrl != '') {
+                        divImg.innerHTML = '';
+                        let imgTag = document.createElement("img");
+                        imgTag.src = pagObj.dataUrl;
+                        page.querySelector(`div.tiff-image`).appendChild(imgTag);
+                    } else {
+                        let tiff_page_result = { value: false };
+                        while(!tiff_page_result.value) {
+                            tiff_page_result = await this._DAO.SelectByIndexAsync(this._tiff_page_table, this._idx_imgid_pagenum, IDBKeyRange.only([this._tiffContent.imgid, numpage]));
+                            if(tiff_page_result.status == 'success') {
+                                if(tiff_page_result.value) {
+                                    divImg.innerHTML = '';
+                                    let imgTag = document.createElement("img");
+                                    imgTag.src = tiff_page_result.value.dataUrl;
+                                    page.querySelector(`div.tiff-image`).appendChild(imgTag);
+                                } else {
+                                    await this._sleep(250);
+                                }
                             }
-                            divImg.innerHTML = '';
-                            let imgTag = document.createElement("img");
-                            imgTag.src = this._tiffContent.pages[pageindex].dataUrl;
-                            page.querySelector(`div.tiff-image`).appendChild(imgTag);
                         }
+                        
                     }
+                }
+            }
+        }
+    }
+
+    async _showCurrentPageZoneFromMemory() {
+        if(this._tiffContent.totalPages <= this._numPagesInMemoryLimit) {
+            // mostrar todas las paginas en memoria
+            if(!this._allPagesInMemoryShowed) {
+                let pageStart = 1;
+                let pageEnd = this._tiffContent.totalPages;
+                for (let npage = pageStart; npage <= pageEnd; npage++) {
+                    this._showNumPageFromMemory(npage);
+                }
+                this._allPagesInMemoryShowed = true;
+            }
+        } else {
+            // mostrar las paginas en el rango de la pagina actual
+            let start = this._tiffContent.currentPage - this._maxAroundPagesToShow;
+            let end = this._tiffContent.currentPage + this._maxAroundPagesToShow;
+            let pageStart = start > 0 ? start : 1;
+            let pageEnd = end <= this._tiffContent.totalPages ? end : this._tiffContent.totalPages;
+            for (let npage = pageStart; npage <= pageEnd; npage++) {
+                this._showNumPageFromMemory(npage);
+            }
+        }
+    }
+
+    async _showNumPageFromMemory(numpage) {
+        let page = this._divPages.querySelector(`div.tiff-page[data-page="${numpage}"]`);
+        if(page) {
+            let divImg = page.querySelector(`div.tiff-image`);
+            let imgTag = page.querySelector(`div.tiff-image img`);
+            if(divImg) {
+                if(!imgTag) {
+                    divImg.innerHTML = '<div class="lds-dual-ring"></div>';
+                    let pagObj = this._tiffContent.pages.find(page => page.pagenum == numpage);
+                    while(pagObj.dataUrl == '') {
+                        await this._sleep(250);
+                        pagObj = this._tiffContent.pages.find(page => page.pagenum == numpage);
+                    }
+                    divImg.innerHTML = '';
+                    let imgTag = document.createElement("img");
+                    imgTag.src = pagObj.dataUrl;
+                    page.querySelector(`div.tiff-image`).appendChild(imgTag);
                 }
             }
         }
@@ -360,6 +593,7 @@ class TiffViewer {
     }
 
     _bindEvents() {
+        this._bindPageObserver();
         this._inputNumPage.addEventListener("keyup", (event) => { this._onInputNumPage(event); });
         this._inputNumPage.addEventListener("focusout", (event) => { this._onInputNumPage(event); });
         this._inputNumPage.addEventListener("keydown", (event) => { this._onInputKeyDownEnter(event); });
@@ -395,8 +629,8 @@ class TiffViewer {
     _zoomOut() {
         let zoom = parseInt(this._inputZoom.value.replace("%", ""));
         zoom -= 10;
-        if(zoom < 20) {
-            zoom = 20;
+        if(zoom < 30) {
+            zoom = 30;
         }
         this._setZoom(zoom);
     }
@@ -405,7 +639,7 @@ class TiffViewer {
         if (event.key === 'Enter') {
             if(this._isPositiveInteger(this._inputZoom.value.replace("%", ""))) {
                 let zoom = parseInt(this._inputZoom.value.replace("%", ""));
-                if(zoom >= 20 && zoom <= 300) {
+                if(zoom >= 30 && zoom <= 300) {
                     this._setZoom(zoom);
                 } else {
                     this._inputZoom.value = this._lastZoom + '%';
@@ -502,14 +736,13 @@ class TiffViewer {
     }
 
     _pageObserverCallback(entries) {
-        entries.forEach(entry => {
-            if(entry.isIntersecting) {
-                let paginaVisible = parseInt(entry.target.innerHTML);
-                this._tiffContent.currentPage = paginaVisible;
-                this._inputNumPage.value = this._tiffContent.currentPage;
-                this._showCurrentPageZone();
-            }
-        });
+        let intersectingEntries = entries.filter(entry => entry.isIntersecting);
+        let paginaVisible = Math.min.apply(Math,intersectingEntries.map((entry) => { return parseInt(entry.target.innerHTML); }));
+        if(paginaVisible !== Infinity) {
+            this._tiffContent.currentPage = paginaVisible;
+            this._inputNumPage.value = this._tiffContent.currentPage;
+            this._showCurrentPageZone();
+        }
     }
 
     _isPositiveInteger(str) {
@@ -554,18 +787,19 @@ class TiffViewerDB {
                 tableName: 'tiff_image', 
                 keyOptions: {keyPath: "id", autoIncrement: true},
                 indexes: [
-                    {name: "url", index_options: {unique: true}},
-                    {name: "size", index_options: {unique: false}},
-                    {name: "totalPages", index_options: {unique: false}},
-                    {name: "lastUsed", index_options: {unique: false}}
+                    {idxname:"idx_url", name: "url", index_options: {unique: true}},
+                    {idxname:"idx_size", name: "size", index_options: {unique: false}},
+                    {idxname:"idx_totalPages", name: "totalPages", index_options: {unique: false}},
+                    {idxname:"idx_lastUsed", name: "lastUsed", index_options: {unique: false}}
                 ]
             },
             {
                 tableName: 'tiff_page',
                 keyOptions: {keyPath: "id", autoIncrement: true},
                 indexes: [
-                    {name: "imgid", index_options: {unique: false}},
-                    {name: "pagenum", index_options: {unique: false}}
+                    {idxname:"idx_imgid", name: "imgid", index_options: {unique: false}},
+                    {idxname:"idx_pagenum", name: "pagenum", index_options: {unique: false}},
+                    {idxname:"idx_imgid_pagenum", name: ["imgid","pagenum"], index_options: {unique: true}}
                 ]
             }
         ];
@@ -609,7 +843,7 @@ class TiffViewerDB {
                 const table_config = this._localDB.tables_config[table_idx];
                 let store = db.createObjectStore(table_config.tableName, table_config.keyOptions);
                 for (let col_idx = 0; col_idx < table_config.indexes.length; col_idx++) {
-                    store.createIndex(`idx_${table_config.indexes[col_idx].name}`, table_config.indexes[col_idx].name, table_config.indexes[col_idx].index_options);
+                    store.createIndex(table_config.indexes[col_idx].idxname, table_config.indexes[col_idx].name, table_config.indexes[col_idx].index_options);
                 }
                 this._localDB.tables[table_config.tableName] = store;
             }

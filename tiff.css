@@ -176,7 +176,7 @@
 .tiff-viewer .tiff-pages div.tiff-page {
     padding: 0 15px 15px 15px;
     margin: 0 auto 0 auto;
-    min-width: 20%;
+    min-width: 30%;
     max-width: 300%;
     box-sizing: border-box;
     text-align: center;
