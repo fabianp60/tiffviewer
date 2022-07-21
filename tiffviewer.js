@@ -28,30 +28,31 @@ class TiffViewer {
         // si se supera el limite de  _numPagesInMemoryLimit
         this._maxAroundPagesToShow = 5;
         // indica si indexedDB está disponible
+        // siempre que se pueda usar la BD se usará
         this._canUseDB = false;
-        // indica si se usará BD o si se cargara todo en memoria
-        this._usingDatabase = false;
         // indica si se mostraron todas las paginas (solo si se cargan todas en memoria)
-        this._allPagesInMemoryShowed = false;
+        this._allPagesShowed = false;
         // indica el maximo numero de dias que se puede guardar una imagen en BD
-        this._maxDaysInBD = 3;
+        this._maxDaysInBD = 1;
         this._tiffContent = { 
             file: {
                 url: this._divTiffViewer.dataset.tiffUrl,
                 fileName: this._getFileName(this._divTiffViewer.dataset.tiffUrl),
                 size: 0, // in bytes
-                maxSize: 52428800, // in bytes {50MB: 52428800, 600MB: 629145600, 300MB: 314572800}
+                maxSize: 629145600, // in bytes {50MB: 52428800, 600MB: 629145600, 300MB: 314572800}
                 sizeToPrint: "",
                 downloadProgress: 0,
                 loadProgress: 0,
                 exists: false
             },
+            tiff: null,
+            alreadyExistsOnBD: false,
+            imageFromBD: null,
             loadTryEnd: false,
-            totalPages: 0, 
+            totalPages: 0,
             currentPage: 0, 
             currentAngle: 0, 
-            pages: [],
-            imgid: 0 
+            pages: []
         };
         this._init();
     }
@@ -235,8 +236,11 @@ class TiffViewer {
                             }
                         }
                     } else {
+                        this._tiffContent.alreadyExistsOnBD = true;
+                        this._tiffContent.imageFromBD = image;
                         // update lastUsed
                         image.lastUsed = date_now;
+                        image.url = this._tiffContent.file.url;
                         let result = await this._DAO.UpdateAsync(this._tiff_imag_table, image);
                         if(result.status != 'success') {
                             console.log('No se pudo actualizar la fecha de uso de la imagen ' + image.url);
@@ -258,6 +262,7 @@ class TiffViewer {
     }
 
     async LoadAndShow() {
+        // intenta abrir la BD y si conecta, limpia las imagenes más antiguas
         await this._tryOpenDB();
         try {
             this._tiffContent.file.size = await this._getFileSize(this._tiffContent.file.url);
@@ -267,6 +272,7 @@ class TiffViewer {
             } else if(this._tiffContent.file.size > this._tiffContent.file.maxSize) {
                 this._showDialogAlert('Tiff Viewer',`El archivo es demasiado grande para ser visualizado (${this._tiffContent.file.sizeToPrint})`);
             } else {
+                this._tiffContent.file.exists = true;
                 this._loadFile();
             }
         } catch(err) {
@@ -284,7 +290,15 @@ class TiffViewer {
             this._setFileDataOnUI();
             promises.push(this._UpdateDownloadProgressAsync());
             promises.push(this._UpdateLoadProgressAsync());
-            promises.push(this._getTiffFileOnMemory(this._divTiffViewer.dataset.tiffUrl));
+            if(this._tiffContent.alreadyExistsOnBD) {
+                if(!this._tiffContent.imageFromBD.allPagesLoaded) {
+                    promises.push(this._LoadPagesFromDBAsync());
+                } else {
+                    promises.push(this._LoadPagesFromTiffFileAsync());
+                }
+            } else {
+                promises.push(this._LoadPagesFromTiffFileAsync());
+            }
             await Promise.all(promises);
         } catch(err) {
             this._showDialogAlert('Tiff Viewer',`Error al cargar el archivo: ${err.statusText}`);
@@ -313,9 +327,69 @@ class TiffViewer {
        this._pgLoad.value = this._tiffContent.file.loadProgress;
     }
 
+    async _LoadPagesFromDBAsync() {
+        this._divLoading.classList.remove("hide");
+        this._tiffContent.file.downloadProgress = 100;
+        this._tiffContent.file.loadProgress = 100;
+        await this._showCurrentPageZone();
+        this._bindEvents();
+        this._divLoading.classList.add("hide");
+    }
+
+    async _LoadPagesFromTiffFileAsync() {
+        try {
+            this._divLoading.classList.remove("hide");
+            let tiffDownloaded = await this._getTiffFileOnMemory(this._divTiffViewer.dataset.tiffUrl);
+            if(tiffDownloaded.status == 'success') {
+                if(this._tiffContent.totalPages > 0) {
+                    this._startLoadingPagesFromTiff();
+                } else {
+                    this._showDialogAlert('Tiff Viewer',`El archivo no tiene paginas`);
+                }
+                this._divLoading.classList.add("hide");
+            }
+        } catch(err) {
+            this._showDialogAlert('Tiff Viewer',`Error al cargar el archivo: ${err.statusText}`);
+            console.error(err);
+        }
+    }
+
+    async _startLoadingPagesFromTiff() {
+        for(let i = 0; i < this._tiffContent.totalPages; i++) {
+            this._tiffContent.pages.push({pagenum:i+1,dataUrl:'',width:0,height:0, lastTimeViewed:Infinity});
+        }
+        this._inputTotalPages.value = this._tiffContent.totalPages;
+        if(this._tiffContent.totalPages > 0) {
+            if(this._initParams.page > 0 && this._initParams.page <= this._tiffContent.totalPages) {
+                this._tiffContent.currentPage = this._initParams.page;
+            } else {
+                this._tiffContent.currentPage = 1;
+            }
+        }
+        this._drawEmptyPages();
+        this._inputNumPage.value = this._tiffContent.currentPage;
+        
+        if(this._canUseDB) {
+            if(!this._tiffContent.alreadyExistsOnBD) {
+                this._tiffContent.imageFromBD = { fileName: this._tiffContent.file.fileName, url: this._tiffContent.file.url, size: this._tiffContent.file.size, totalPages: this._tiffContent.totalPages, allPagesLoaded: false, lastUsed: Date.now() };
+                this._tiffContent.alreadyExistsOnBD = await this._insertTiffImage();
+            }
+            // la siguiente instrucción es async así que continuará sin importar no haber terminado
+            this._loadPagesInDatabase();
+        } else {
+            // la siguiente instrucción es async así que continuará sin importar no haber terminado
+            this._loadPagesInMemory();
+        }
+        // mostrara las paginas cuando estén disponibles en memoria
+        this._showCurrentPageZone().then(function() {
+            // Registra los eventos
+            this._bindEvents();
+            this._divLoading.classList.add("hide");
+        }.bind(this));
+    }
+
     _getTiffFileOnMemory(url) {
         return new Promise(function (resolve, reject) {
-            this._divLoading.classList.remove("hide");
             Tiff.initialize({TOTAL_MEMORY: this._tiffContent.file.maxSize});
             let xhr = new XMLHttpRequest();
             xhr.responseType = 'arraybuffer';
@@ -323,55 +397,16 @@ class TiffViewer {
             xhr.onload = function (e) {
                 if (xhr.status === 200) {
                     try {
+                        this._tiffContent.file.downloadProgress = 100;
                         let buffer = xhr.response;
                         let tiff = new Tiff({buffer: buffer});
                         this._tiffContent.totalPages = tiff.countDirectory();
-                        if(this._tiffContent.totalPages > 0) {
-                            this._usingDatabase = false;
-                            if(this._tiffContent.totalPages > this._numPagesInMemoryLimit) {
-                                if(this._canUseDB) {
-                                    this._usingDatabase = true;
-                                } 
-                            }
-
-                            for(let i = 0; i < this._tiffContent.totalPages; i++) {
-                                this._tiffContent.pages.push({pagenum:i+1,dataUrl:'',width:0,height:0, lastTimeViewed:Infinity});
-                            }
-                            this._inputTotalPages.value = this._tiffContent.totalPages;
-                            if(this._tiffContent.totalPages > 0) {
-                                if(this._initParams.page > 0 && this._initParams.page <= this._tiffContent.totalPages) {
-                                    this._tiffContent.currentPage = this._initParams.page;
-                                } else {
-                                    this._tiffContent.currentPage = 1;
-                                }
-                            }
-                            this._drawEmptyPages();
-                            this._inputNumPage.value = this._tiffContent.currentPage;
-                            // mostrara las paginas cuando estén disponibles en memoria
-                            this._showCurrentPageZone().then(function() {
-                                // Registra los eventos
-                                this._bindEvents();
-                                this._divLoading.classList.add("hide");
-                            }.bind(this));
-                            if(this._usingDatabase) {
-                                // la siguiente instrucción es async así que continuará sin importar no haber terminado
-                                this._loadPagesInDatabase(tiff);
-                            } else {
-                                // la siguiente instrucción es async así que continuará sin importar no haber terminado
-                                this._loadPagesInMemory(tiff);
-                            }
-                            
-                            tiff = null;
-                            resolve(true);
-                        } else {
-                            this._divLoading.classList.add("hide");
-                            this._showDialogAlert('Tiff Viewer',`El archivo no tiene paginas`);
-                        }
+                        this._tiffContent.tiff = tiff;
+                        resolve({status: "success", statusText: "Ok"});
                     } catch(err) {
                         reject({status: "Error", statusText: err.message});
                     }
                 } else {
-                    this._divLoading.classList.add("hide");
                     reject({ status: xhr.status, statusText: xhr.statusText });
                 }
             }.bind(this);
@@ -385,58 +420,76 @@ class TiffViewer {
         }.bind(this));
     }
 
-    async _loadPagesInDatabase(tiff) {
+    async _loadPagesInDatabase() {
         let promises = [];
-        let tiff_image = { fileName: this._tiffContent.file.fileName, url: this._tiffContent.file.url, size: this._tiffContent.file.size, totalPages: this._tiffContent.totalPages, lastUsed: Date.now() };
-        let imageInserted = await this._insertTiffImage(tiff_image);
-        if(imageInserted) {
+        if(this._tiffContent.alreadyExistsOnBD) {
             for(let i = 0; i < this._tiffContent.totalPages; i++) {
-                tiff.setDirectory(i);
+                let pageExists = false;
                 let tiff_page = structuredClone(this._tiffContent.pages[i]);
-                tiff_page.dataUrl = tiff.toCanvas().toDataURL(), 
-                tiff_page.width = tiff.width();
-                tiff_page.height = tiff.height();
+                let tiff_page_result = await this._DAO.SelectByIndexAsync(this._tiff_page_table, this._idx_imgid_pagenum, IDBKeyRange.only([this._tiffContent.imageFromBD.id, tiff_page.pagenum]));
+                if(tiff_page_result.status == 'success') {
+                    if(tiff_page_result.value) {
+                        pageExists = true;
+                    }
+                }
+                if(!pageExists) {
+                    this._tiffContent.tiff.setDirectory(i);
+                    tiff_page.dataUrl = this._tiffContent.tiff.toCanvas().toDataURL(), 
+                    tiff_page.width = this._tiffContent.tiff.width();
+                    tiff_page.height = this._tiffContent.tiff.height();
+                    promises.push(this._loadPageInDatabase(tiff_page));
+                }
                 this._tiffContent.file.loadProgress = Math.floor((i / this._tiffContent.totalPages) * 100);
-                promises.push(this._loadPageInDatabase(this._tiffContent.imgid, tiff_page));
             }
             await Promise.all(promises);
             this._tiffContent.isLoaded = true;
+            this._tiffContent.file.loadProgress = 100;
+            this._tiffContent.imageFromBD.allPagesLoaded = true;
+            this._tiffContent.alreadyExistsOnBD = true;
+            await this._updateTiffImage();
         } else {
-            if(this._tiffContent.imgid > 0) {
-                // TODO: validar si se deben cargar paginas faltantes y cargarlas en BD
-                this._tiffContent.isLoaded = true;
-            } else {
-                this._showDialogAlert('Tiff Viewer',`Error durante el cargue del archivo (idxDB)`);
-            }
+            this._showDialogAlert('Tiff Viewer',`Error durante el cargue del archivo (idxDB)`);
         }
-        tiff = null;
-        this._tiffContent.file.loadProgress = 100;
+        this._tiffContent.tiff = null;
     }
 
-    async _insertTiffImage(tiff_image) {
+    async _insertTiffImage() {
         let inserted = false;
         try {
-            let timg_result = await this._DAO.SelectByIndexAsync(this._tiff_imag_table, 'idx_fileName', tiff_image.fileName);
+            let timg_result = await this._DAO.SelectByIndexAsync(this._tiff_imag_table, 'idx_fileName', this._tiffContent.imageFromBD.fileName);
             if(timg_result.status == 'success') {
                 if(timg_result.value) {
-                    tiff_image.id = timg_result.value.id;
-                    this._tiffContent.imgid = timg_result.value.id;
+                    this._tiffContent.imageFromBD.id = timg_result.value.id;
                 } 
                 else {
-                    let tiff_img_insert = await this._DAO.InsertAsync(this._tiff_imag_table, tiff_image);
+                    let tiff_img_insert = await this._DAO.InsertAsync(this._tiff_imag_table, this._tiffContent.imageFromBD);
                     if(tiff_img_insert.status == 'success') {
-                        this._tiffContent.imgid = tiff_img_insert.value;
+                        this._tiffContent.imageFromBD.id = tiff_img_insert.value;
                         inserted = true;
                     }
                 }
             }
         } catch(err) {
-            console.error(`La imagen ${tiff_image.url} no se pudo insertar`, err);
+            console.error(`La imagen ${this._tiffContent.imageFromBD.url} no se pudo insertar`, err);
         }
         return inserted;
     }
 
-    async _loadPageInDatabase(tiff_img_id, tiff_page) {
+    async _updateTiffImage() {
+        let updated = false;
+        try {
+            let timg_result = await this._DAO.UpdateAsync(this._tiff_imag_table, this._tiffContent.imageFromBD);
+            if(timg_result.status == 'success') {
+                updated = true;
+            }
+        } catch(err) {
+            console.error(`La imagen ${this._tiffContent.imageFromBD.url} no se pudo actualizar`, err);
+        }
+        return updated;
+    }
+
+    async _loadPageInDatabase(tiff_page) {
+        let tiff_img_id = this._tiffContent.imageFromBD.id;
         let pageLoaded = false;
         let maxTrys = 2, trynum = 0;
         while(!pageLoaded && trynum < maxTrys) {
@@ -470,12 +523,12 @@ class TiffViewer {
         return pageLoaded;
     }
 
-    async _loadPagesInMemory(tiff) {
+    async _loadPagesInMemory() {
         for (let i = 0, len = this._tiffContent.totalPages; i < len; ++i) {
             tiff.setDirectory(i);
-            this._tiffContent.pages[i].dataUrl = tiff.toCanvas().toDataURL(), 
-            this._tiffContent.pages[i].width = tiff.width();
-            this._tiffContent.pages[i].height = tiff.height();
+            this._tiffContent.pages[i].dataUrl = this._tiffContent.tiff.toCanvas().toDataURL(), 
+            this._tiffContent.pages[i].width = this._tiffContent.tiff.width();
+            this._tiffContent.pages[i].height = this._tiffContent.tiff.height();
             this._tiffContent.file.loadProgress = Math.floor(((i + 1) / this._tiffContent.totalPages) * 100);
         }
         this._tiffContent.isLoaded = true;
@@ -502,7 +555,7 @@ class TiffViewer {
     async _showCurrentPageZone() {
         if(this._tiffContent.totalPages > 0) {
             if(this._tiffContent.currentPage > 0 && this._tiffContent.currentPage <= this._tiffContent.totalPages) {
-                if(this._usingDatabase) {
+                if(this._canUseDB) {
                     await this._showCurrentPageZoneFromDB();
                 } else {
                     await this._showCurrentPageZoneFromMemory();
@@ -511,51 +564,71 @@ class TiffViewer {
         }
     }
 
-    async _showCurrentPageZoneFromDB() {
-        // mostrar las paginas en el rango de la pagina actual
-        let start = this._tiffContent.currentPage - this._maxAroundPagesToShow;
-        let end = this._tiffContent.currentPage + this._maxAroundPagesToShow;
-        let pageStart = start > 0 ? start : 1;
-        let pageEnd = end <= this._tiffContent.totalPages ? end : this._tiffContent.totalPages;
-        let promises = [];
+    async _unshowPagesExceptPageRange(rangeIni, rangeEnd) {
+        let pageStart = 1;
+        let pageEnd = this._tiffContent.totalPages;
         for(let i = pageStart; i <= pageEnd; i++) {
-            promises.push(this._showPageFromDB(i));
+            if(i < rangeIni || i > rangeEnd) {
+                let page = this._divPages.querySelector(`div.tiff-page[data-page="${i}"]`);
+                if(page) {
+                    let divImg = page.querySelector(`div.tiff-image`);
+                    if(divImg) {
+                        divImg.innerHTML = '';;
+                    }
+                }
+            }
         }
-        await Promise.all(promises);  
+    }
+
+    async _showCurrentPageZoneFromDB() {
+        if(this._tiffContent.totalPages <= this._numPagesInMemoryLimit) {
+            // mostrar todas las paginas en memoria
+            if(!this._allPagesShowed) {
+                let promises = [];
+                let pageStart = 1;
+                let pageEnd = this._tiffContent.totalPages;
+                for(let i = pageStart; i <= pageEnd; i++) {
+                    promises.push(this._showPageFromDB(i));
+                }
+                await Promise.all(promises); 
+            }
+        } else {
+            // mostrar las paginas en el rango de la pagina actual
+            let start = this._tiffContent.currentPage - this._maxAroundPagesToShow;
+            let end = this._tiffContent.currentPage + this._maxAroundPagesToShow;
+            let pageStart = start > 0 ? start : 1;
+            let pageEnd = end <= this._tiffContent.totalPages ? end : this._tiffContent.totalPages;
+            await this._unshowPagesExceptPageRange(pageStart, pageEnd);
+            let promises = [];
+            for(let i = pageStart; i <= pageEnd; i++) {
+                promises.push(this._showPageFromDB(i));
+            }
+            await Promise.all(promises);  
+        }
     }
 
     async _showPageFromDB(numpage) {
         let page = this._divPages.querySelector(`div.tiff-page[data-page="${numpage}"]`);
-        let pagObj = this._tiffContent.pages.find(page => page.pagenum == numpage);
-
         if(page) {
             let divImg = page.querySelector(`div.tiff-image`);
             let imgTag = page.querySelector(`div.tiff-image img`);
             if(divImg) {
                 if(!imgTag) {
                     divImg.innerHTML = '<div class="lds-dual-ring"></div>';
-                    if(pagObj.dataUrl != '') {
-                        divImg.innerHTML = '';
-                        let imgTag = document.createElement("img");
-                        imgTag.src = pagObj.dataUrl;
-                        page.querySelector(`div.tiff-image`).appendChild(imgTag);
-                    } else {
-                        let tiff_page_result = { value: false };
-                        while(!tiff_page_result.value) {
-                            tiff_page_result = await this._DAO.SelectByIndexAsync(this._tiff_page_table, this._idx_imgid_pagenum, IDBKeyRange.only([this._tiffContent.imgid, numpage]));
-                            if(tiff_page_result.status == 'success') {
-                                if(tiff_page_result.value) {
-                                    divImg.innerHTML = '';
-                                    let imgTag = document.createElement("img");
-                                    imgTag.src = tiff_page_result.value.dataUrl;
-                                    page.querySelector(`div.tiff-image`).appendChild(imgTag);
-                                } else {
-                                    await this._sleep(250);
-                                }
+                    let tiff_page_result;
+                    do {
+                        tiff_page_result = await this._DAO.SelectByIndexAsync(this._tiff_page_table, this._idx_imgid_pagenum, IDBKeyRange.only([this._tiffContent.imageFromBD.id, numpage]));
+                        if(tiff_page_result.status == 'success') {
+                            if(tiff_page_result.value) {
+                                divImg.innerHTML = '';
+                                let imgTag = document.createElement("img");
+                                imgTag.src = tiff_page_result.value.dataUrl;
+                                page.querySelector(`div.tiff-image`).appendChild(imgTag);
+                            } else {
+                                await this._sleep(250);
                             }
                         }
-                        
-                    }
+                    } while(!tiff_page_result.value);
                 }
             }
         }
@@ -564,13 +637,13 @@ class TiffViewer {
     async _showCurrentPageZoneFromMemory() {
         if(this._tiffContent.totalPages <= this._numPagesInMemoryLimit) {
             // mostrar todas las paginas en memoria
-            if(!this._allPagesInMemoryShowed) {
+            if(!this._allPagesShowed) {
                 let pageStart = 1;
                 let pageEnd = this._tiffContent.totalPages;
                 for (let npage = pageStart; npage <= pageEnd; npage++) {
                     this._showNumPageFromMemory(npage);
                 }
-                this._allPagesInMemoryShowed = true;
+                this._allPagesShowed = true;
             }
         } else {
             // mostrar las paginas en el rango de la pagina actual
@@ -578,6 +651,7 @@ class TiffViewer {
             let end = this._tiffContent.currentPage + this._maxAroundPagesToShow;
             let pageStart = start > 0 ? start : 1;
             let pageEnd = end <= this._tiffContent.totalPages ? end : this._tiffContent.totalPages;
+            await this._unshowPagesExceptPageRange(pageStart, pageEnd);
             for (let npage = pageStart; npage <= pageEnd; npage++) {
                 this._showNumPageFromMemory(npage);
             }
