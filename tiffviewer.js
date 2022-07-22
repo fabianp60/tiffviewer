@@ -373,6 +373,7 @@ class TiffViewer {
         this._tiffContent.file.loadProgress = 100;
         this._prepareInterfaceForShowPages();
         await this._showCurrentPageZone();
+        this._setPage(this._tiffContent.currentPage);
         this._bindEvents();
         this._divLoading.classList.add("hide");
     }
@@ -427,6 +428,7 @@ class TiffViewer {
         // mostrara las paginas cuando estén disponibles en memoria
         this._showCurrentPageZone().then(function() {
             // Registra los eventos
+            this._setPage(this._tiffContent.currentPage);
             this._bindEvents();
             this._divLoading.classList.add("hide");
         }.bind(this));
