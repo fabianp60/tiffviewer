@@ -33,7 +33,10 @@ class TiffViewer {
         // indica si se mostraron todas las paginas (solo si se cargan todas en memoria)
         this._allPagesShowed = false;
         // indica el maximo numero de dias que se puede guardar una imagen en BD
-        this._maxDaysInBD = 1;
+        this._maxDaysOnBD = 1;
+        // indica el maximo numero de imagenes tiff que se pueden guardar en BD indexedDB
+        // 0 indica que solo se usa el máximo de días
+        this._maxFilesOnBD = 2;
         this._tiffContent = { 
             file: {
                 url: this._divTiffViewer.dataset.tiffUrl,
@@ -215,29 +218,37 @@ class TiffViewer {
             let images_result = await this._DAO.SelectAllAsync(this._tiff_imag_table);
             if(images_result.status == 'success') {
                 let images = images_result.value;
+                let totalImages = images.length;
                 let date_now = Date.now();
-                for(let i = 0; i < images.length; i++) {
+                let deleteCounter = 0;
+                if(this._maxFilesOnBD > 0) {
+                    deleteCounter = totalImages - this._maxFilesOnBD;
+                }
+                for(let i = 0; i < totalImages; i++) {
                     let image = images[i];
                     if(this._getFileName(image.url) != this._tiffContent.file.fileName) {
                         let num_days = this._calcNumDays(date_now, images[i].lastUsed);
-                        if(num_days > this._maxDaysInBD) {
+                        if(num_days > this._maxDaysOnBD || deleteCounter > 0) {
                             // delete image pages from database
                             try {
-                                let delete_result = await this._DAO.DeleteByIndexAsync(this._tiff_page_table,'idx_imgid', image.id);
-                                if(delete_result.status != 'success') {
-                                    console.log('No se pudo eliminar las paginas de la imagen ' + image.url);
+                                if(!await this._deletePagesFromImage(image))
+                                {
+                                    console.log('No se pudo eliminar las páginas de la imagen ' + image.url);
                                 }
-                            } catch {
+                            } catch (err) {
+                                console.log(err);
                                 console.log('No se pudo eliminar las paginas de la imagen ' + image.url);
                             }
                             let result = await this._DAO.DeleteAsync(this._tiff_imag_table, image.id);
                             if(result.status != 'success') {
                                 console.log('No se pudo eliminar la imagen ' + image.url);
                             }
+                            deleteCounter--;
                         }
                     } else {
                         this._tiffContent.alreadyExistsOnBD = true;
                         this._tiffContent.imageFromBD = image;
+                        this._tiffContent.totalPages = this._tiffContent.imageFromBD.totalPages;
                         // update lastUsed
                         image.lastUsed = date_now;
                         image.url = this._tiffContent.file.url;
@@ -252,6 +263,35 @@ class TiffViewer {
             }
         } catch(err) {
             console.log('Error al limpiar la base de datos', err);
+        }
+    }
+
+    async _deletePagesFromImage(image) {
+        let promises = [];
+        for(let i = 1; i <= image.totalPages; i++) {
+            promises.push(this._deletePageFromImage(image.id, i));
+        }
+        let results = await Promise.all(promises);
+        return promises.length == results.filter(res => res == true).length
+    }
+
+    async _deletePageFromImage(imgid,pagenum) {
+        try {
+            let tiff_page_result = await this._DAO.SelectByIndexAsync(this._tiff_page_table, this._idx_imgid_pagenum, IDBKeyRange.only([imgid, pagenum]));
+            if(tiff_page_result.status == 'success') {
+                if(tiff_page_result.value) {
+                    let key = tiff_page_result.value.id;
+                    let delete_result = await this._DAO.DeleteAsync(this._tiff_page_table, key);
+                    if(delete_result.status == 'success') {
+                        return true;
+                    } else {
+                        console.log(`No se pudo eliminar las pagina ${pagenum} de la imagen ${imgid}`);
+                    }
+                }
+            }
+        } catch (err) {
+            console.log(`No se pudo eliminar la pagina ${pagenum} de la imagen ${imgid}`, err);
+            return false;
         }
     }
 
@@ -291,7 +331,7 @@ class TiffViewer {
             promises.push(this._UpdateDownloadProgressAsync());
             promises.push(this._UpdateLoadProgressAsync());
             if(this._tiffContent.alreadyExistsOnBD) {
-                if(!this._tiffContent.imageFromBD.allPagesLoaded) {
+                if(this._tiffContent.imageFromBD.allPagesLoaded) {
                     promises.push(this._LoadPagesFromDBAsync());
                 } else {
                     promises.push(this._LoadPagesFromTiffFileAsync());
@@ -331,9 +371,26 @@ class TiffViewer {
         this._divLoading.classList.remove("hide");
         this._tiffContent.file.downloadProgress = 100;
         this._tiffContent.file.loadProgress = 100;
+        this._prepareInterfaceForShowPages();
         await this._showCurrentPageZone();
         this._bindEvents();
         this._divLoading.classList.add("hide");
+    }
+
+    _prepareInterfaceForShowPages() {
+        for(let i = 0; i < this._tiffContent.totalPages; i++) {
+            this._tiffContent.pages.push({pagenum:i+1,dataUrl:'',width:0,height:0, lastTimeViewed:Infinity});
+        }
+        this._inputTotalPages.value = this._tiffContent.totalPages;
+        if(this._tiffContent.totalPages > 0) {
+            if(this._initParams.page > 0 && this._initParams.page <= this._tiffContent.totalPages) {
+                this._tiffContent.currentPage = this._initParams.page;
+            } else {
+                this._tiffContent.currentPage = 1;
+            }
+        }
+        this._drawEmptyPages();
+        this._inputNumPage.value = this._tiffContent.currentPage;
     }
 
     async _LoadPagesFromTiffFileAsync() {
@@ -355,20 +412,7 @@ class TiffViewer {
     }
 
     async _startLoadingPagesFromTiff() {
-        for(let i = 0; i < this._tiffContent.totalPages; i++) {
-            this._tiffContent.pages.push({pagenum:i+1,dataUrl:'',width:0,height:0, lastTimeViewed:Infinity});
-        }
-        this._inputTotalPages.value = this._tiffContent.totalPages;
-        if(this._tiffContent.totalPages > 0) {
-            if(this._initParams.page > 0 && this._initParams.page <= this._tiffContent.totalPages) {
-                this._tiffContent.currentPage = this._initParams.page;
-            } else {
-                this._tiffContent.currentPage = 1;
-            }
-        }
-        this._drawEmptyPages();
-        this._inputNumPage.value = this._tiffContent.currentPage;
-        
+        this._prepareInterfaceForShowPages();
         if(this._canUseDB) {
             if(!this._tiffContent.alreadyExistsOnBD) {
                 this._tiffContent.imageFromBD = { fileName: this._tiffContent.file.fileName, url: this._tiffContent.file.url, size: this._tiffContent.file.size, totalPages: this._tiffContent.totalPages, allPagesLoaded: false, lastUsed: Date.now() };
@@ -1015,25 +1059,6 @@ class TiffViewerDB {
                 reject({status:"error", value: 'Base de datos no abierta'});
             }
         });
-    }
-
-    DeleteByIndexAsync(tableName, byindex, key) {
-        return new Promise(function (resolve, reject) {
-            if(this._localDB.db_is_open) {
-                let transaction = this._localDB.db.transaction(tableName, 'readwrite');
-                let store = transaction.objectStore(tableName);
-                let index = store.index(byindex);
-                let request = index.delete(key);
-                request.onsuccess = (evt) => {
-                    resolve({status:"success", value: evt.target.result});
-                }
-                request.onerror = (err) => {
-                    reject({status:"error", value: err.target.error.message});
-                }
-            } else {
-                reject({status:"error", value: 'Base de datos no abierta'});
-            }
-        }.bind(this));
     }
 
     UpdateAsync(tableName, obj) {
